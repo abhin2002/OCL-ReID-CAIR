@@ -103,32 +103,61 @@ class TargetIdentificationEvaluator():
 
     def run_video(self):
         # load images
-        if osp.isdir(self.input):
+        if isinstance(self.input, int):
+            # Webcam input
+            imgs = cv2.VideoCapture(self.input)
+            is_webcam = True
+        elif osp.isdir(self.input):
             imgs = sorted(
                 filter(lambda x: x.endswith(('.jpg', '.png', '.jpeg')),
                     os.listdir(self.input)),
                 key=lambda x: int(x.split('.')[0]))
+            is_webcam = False
         else:
             imgs = mmcv.VideoReader(self.input)
+            is_webcam = False
         
         # build the model from a config file and a checkpoint file
         self.init_work_seed(self.seed)
         self.tracker = self.init_tracker(self.seed)
 
-        prog_bar = mmcv.ProgressBar(len(imgs))
-        for i, img in enumerate(imgs):
-            if isinstance(img, str):
-                img_name = os.path.splitext(img)[0]
-                img_path = osp.join(self.input, img)
-                img = mmcv.imread(img_path)
+        if is_webcam:
+            prog_bar = None  # No progress bar for live webcam
+            frame_count = 0
+        else:
+            prog_bar = mmcv.ProgressBar(len(imgs))
+        
+        frame_idx = 0
+        while True:
+            # Get frame from source
+            if is_webcam:
+                ret, img = imgs.read()
+                if not ret:
+                    print("Webcam stream ended or device not available.")
+                    break
+                img_name = f'{frame_idx:06d}.jpg'
+                frame_idx += 1
             else:
-                img_name = f'{i:06d}.jpg'
-            if i == 0:
+                try:
+                    img = next(iter(imgs)) if frame_idx == 0 else None
+                    if img is None:
+                        break
+                except (StopIteration, TypeError):
+                    break
+                
+                if isinstance(img, str):
+                    img_name = os.path.splitext(img)[0]
+                    img_path = osp.join(self.input, img)
+                    img = mmcv.imread(img_path)
+                else:
+                    img_name = f'{frame_idx:06d}.jpg'
+                frame_idx += 1
+            if frame_idx == 1:
                 if self.gt_bbox_file is not None:
                     bboxes = mmcv.list_from_file(self.gt_bbox_file)
                     init_bbox = list(map(float, bboxes[0].split(',')))
                 else:
-                    init_bbox = list(cv2.selectROI(self.input, img, False, False))
+                    init_bbox = list(cv2.selectROI(self.input if isinstance(self.input, str) else "Webcam", img, False, False))
 
                 # convert (x1, y1, w, h) to (x1, y1, x2, y2)
                 init_bbox[2] += init_bbox[0]
@@ -138,7 +167,7 @@ class TargetIdentificationEvaluator():
                 init_bbox = None
             
             time_start = time.time()
-            result_dict, raw_dict = self.tracker.infer(img, init_bbox, i)
+            result_dict, raw_dict = self.tracker.infer(img, init_bbox, frame_idx - 1)
             time_end = time.time()
             # print('infer time cost {:.3f} s'.format(time_end-time_start))
             # print(raw_dict)
@@ -206,19 +235,24 @@ class TargetIdentificationEvaluator():
                     break
 
             if self.output is not None:
-                cv2.imwrite(os.path.join(self.output, f'{i:06d}.jpg'), img_disp)
+                cv2.imwrite(os.path.join(self.output, f'{frame_idx - 1:06d}.jpg'), img_disp)
             time_end = time.time()
             # print('image time cost {:.3f} s'.format(time_end-time_start))
-            prog_bar.update()
+            if prog_bar is not None:
+                prog_bar.update()
         if self.output_json is not None:
             write_to_json(self.output_json, self.result)
+        
+        # Release webcam if used
+        if is_webcam:
+            imgs.release()
         
         cv2.destroyAllWindows()
 
 if __name__ == '__main__':
     sys.path.insert(0, '/mnt/DATA/ABIN/GitHub/OCL/OCL-bytetracker-original/OCLReID')
     parser = ArgumentParser()
-    parser.add_argument('--input', type=str, help='path to the input video or image directory', default=None)
+    parser.add_argument('--input', type=str, help='path to the input video, image directory, or webcam (use "0", "1", "webcam")', default=None)
     parser.add_argument('--output', type=str, default=None, help='path to save the output images')
     parser.add_argument('--show_result', action='store_true', help='whether to display the tracking result')
     parser.add_argument('--method', type=str, choices=['part-OCLReID', 'global-OCLReID', 'rpf-ReID'], default='part-OCLReID', help='tracking method')
@@ -242,6 +276,8 @@ if __name__ == '__main__':
     hyper_params.mmtracking_dir = file_path.parent
     if args.input is None:
         args.input = osp.join(file_path.parent, "demo_video.mp4")
+    elif args.input.lower() in ['0', '1', '2', 'webcam']:  # Webcam input
+        args.input = int(args.input) if args.input.isdigit() else 0
     hyper_params.input = args.input
     hyper_params.output = args.output
     hyper_params.show_result = args.show_result
