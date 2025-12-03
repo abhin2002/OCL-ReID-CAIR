@@ -1,5 +1,5 @@
 import sys
-sys.path.insert(0, '/mnt/DATA/ABIN/GitHub/OCL/OCL-bytetracker-original/OCLReID/mmtrack/models/orientation')
+sys.path.insert(0, '/home/vinayak/Downloads/OCL-ReID-CAIR/mmtrack/models/orientation')
 
 
 
@@ -54,12 +54,53 @@ from pathlib import Path
 
 file_path = Path(__file__).resolve()
 import sys
-sys.path.insert(0, '/mnt/DATA/ABIN/GitHub/OCL/OCL-bytetracker-original/OCLReID')
+sys.path.insert(0, '/home/vinayak/Downloads/OCL-ReID-CAIR/')
 
 def write_to_json(file_path, data):
     # 打开文件读取现有数据，并追加新的数据
     with open(file_path, 'w') as f:
         json.dump(data, f, indent=4)  # 覆盖写入新内容
+
+def display_webcam_visuals(fps=30):
+    """
+    Access the webcam and display visuals in real-time.
+    
+    Args:
+        fps (int): Frames per second for display. Default is 30.
+    """
+    cap = cv2.VideoCapture(0)
+    
+    if not cap.isOpened():
+        print("Error: Could not open webcam")
+        return
+    
+    print("Webcam opened successfully. Press 'q' to quit.")
+    
+    while True:
+        ret, frame = cap.read()
+        
+        if not ret:
+            print("Error: Failed to read frame from webcam")
+            break
+        
+        cv2.imshow('Webcam Display', frame)
+        
+        if cv2.waitKey(int(1.0 / float(fps) * 1000)) & 0xFF == ord('q'):
+            break
+    
+    cap.release()
+    cv2.destroyAllWindows()
+
+def display_webcam_visuals_threaded(fps=30):
+    """
+    Access the webcam and display visuals in real-time in a separate thread.
+    
+    Args:
+        fps (int): Frames per second for display. Default is 30.
+    """
+    webcam_thread = threading.Thread(target=display_webcam_visuals, args=(fps,), daemon=True)
+    webcam_thread.start()
+    return webcam_thread
 
 class TargetIdentificationEvaluator():
     def __init__(self, hyper_config, config, identifier_config):
@@ -102,43 +143,64 @@ class TargetIdentificationEvaluator():
         return Tracker(self.type, self.config, self.ckpt, hyper_config=self.hyper_config, seed=seed, identifier_config=self.identifier_params)
 
     def run_video(self):
-        # load images
-        if osp.isdir(self.input):
-            imgs = sorted(
-                filter(lambda x: x.endswith(('.jpg', '.png', '.jpeg')),
-                    os.listdir(self.input)),
-                key=lambda x: int(x.split('.')[0]))
-        else:
-            imgs = mmcv.VideoReader(self.input)
-        
+        # load images / video / webcam
+        use_webcam = True
+        cap = cv2.VideoCapture(0)
+        imgs = None
+        total_frames = None
+
         # build the model from a config file and a checkpoint file
         self.init_work_seed(self.seed)
         self.tracker = self.init_tracker(self.seed)
 
-        prog_bar = mmcv.ProgressBar(len(imgs))
-        for i, img in enumerate(imgs):
-            if isinstance(img, str):
-                img_name = os.path.splitext(img)[0]
-                img_path = osp.join(self.input, img)
-                img = mmcv.imread(img_path)
-            else:
+        prog_bar = mmcv.ProgressBar(total_frames) if total_frames is not None else None
+
+        i = 0
+        init_bbox = None
+        while True:
+            if use_webcam:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                img = frame
                 img_name = f'{i:06d}.jpg'
+            else:
+                try:
+                    img = imgs[i]
+                except Exception:
+                    break
+                if isinstance(img, str):
+                    img_name = os.path.splitext(img)[0]
+                    img_path = osp.join(self.input, img)
+                    img = mmcv.imread(img_path)
+                else:
+                    img_name = f'{i:06d}.jpg'
+
             if i == 0:
                 if self.gt_bbox_file is not None:
                     bboxes = mmcv.list_from_file(self.gt_bbox_file)
                     init_bbox = list(map(float, bboxes[0].split(',')))
                 else:
-                    init_bbox = list(cv2.selectROI(self.input, img, False, False))
+                    # use a friendly window name for selectROI
+                    init_bbox = list(cv2.selectROI('Select ROI', img, False, False))
 
                 # convert (x1, y1, w, h) to (x1, y1, x2, y2)
-                init_bbox[2] += init_bbox[0]
-                init_bbox[3] += init_bbox[1]
-
-            else:
-                init_bbox = None
+                if len(init_bbox) >= 4:
+                    init_bbox[2] += init_bbox[0]
+                    init_bbox[3] += init_bbox[1]
+                else:
+                    init_bbox = None
             
             time_start = time.time()
-            result_dict, raw_dict = self.tracker.infer(img, init_bbox, i)
+            try:
+                result_dict, raw_dict = self.tracker.infer(img, init_bbox, i)
+            except IndexError as e:
+                # Skip frame if gt_bbox causes indexing issues
+                if "too many indices" in str(e):
+                    init_bbox = np.array([0, 0, img.shape[1], img.shape[0]])
+                    result_dict, raw_dict = self.tracker.infer(img, init_bbox, i)
+                else:
+                    raise
             time_end = time.time()
             # print('infer time cost {:.3f} s'.format(time_end-time_start))
             # print(raw_dict)
@@ -202,21 +264,40 @@ class TargetIdentificationEvaluator():
             # show tracking result
             if self.show_result:
                 cv2.imshow('Tracking Frame', img_disp)
-                if cv2.waitKey(int(1/self.fps * 1000)) & 0xFF == ord('q'):
+                # determine a safe display FPS
+                display_fps = getattr(self, 'fps', None)
+                if use_webcam and cap is not None:
+                    try:
+                        cap_fps = cap.get(cv2.CAP_PROP_FPS)
+                        if cap_fps and cap_fps > 0:
+                            display_fps = cap_fps
+                    except Exception:
+                        pass
+                if not display_fps or display_fps <= 0:
+                    display_fps = 30
+                if cv2.waitKey(int(1.0 / float(display_fps) * 1000)) & 0xFF == ord('q'):
                     break
 
             if self.output is not None:
                 cv2.imwrite(os.path.join(self.output, f'{i:06d}.jpg'), img_disp)
             time_end = time.time()
             # print('image time cost {:.3f} s'.format(time_end-time_start))
-            prog_bar.update()
+            if prog_bar is not None:
+                prog_bar.update()
+            i += 1
         if self.output_json is not None:
             write_to_json(self.output_json, self.result)
-        
+        if use_webcam and cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
+
         cv2.destroyAllWindows()
 
 if __name__ == '__main__':
-    sys.path.insert(0, '/mnt/DATA/ABIN/GitHub/OCL/OCL-bytetracker-original/OCLReID')
+    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~Starting webcam visuals...~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    sys.path.insert(0, '/home/vinayak/Downloads/OCL-ReID-CAIR/')
     parser = ArgumentParser()
     parser.add_argument('--input', type=str, help='path to the input video or image directory', default=None)
     parser.add_argument('--output', type=str, default=None, help='path to save the output images')
@@ -259,9 +340,5 @@ if __name__ == '__main__':
 
     evaluator = TargetIdentificationEvaluator(hyper_params, rpf_config, identifier_config)
     evaluator.run_video()
-
-
-
-
 
     
