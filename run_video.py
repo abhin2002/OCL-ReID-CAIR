@@ -279,7 +279,7 @@ class TargetIdentificationEvaluator():
                     break
 
             if self.output is not None:
-                cv2.imwrite(os.path.join(self.output, f'{i:06d}.jpg'), img_disp)
+                cv2.imwrite(os.path.join(self.output, f'{frame_idx - 1:06d}.jpg'), img_disp)
             time_end = time.time()
             # print('image time cost {:.3f} s'.format(time_end-time_start))
             if prog_bar is not None:
@@ -299,7 +299,7 @@ if __name__ == '__main__':
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~Starting webcam visuals...~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
     sys.path.insert(0, '/home/vinayak/Downloads/OCL-ReID-CAIR/')
     parser = ArgumentParser()
-    parser.add_argument('--input', type=str, help='path to the input video or image directory', default=None)
+    parser.add_argument('--input', type=str, help='path to the input video, image directory, or webcam (use "0", "1", "webcam")', default=None)
     parser.add_argument('--output', type=str, default=None, help='path to save the output images')
     parser.add_argument('--show_result', action='store_true', help='whether to display the tracking result')
     parser.add_argument('--method', type=str, choices=['part-OCLReID', 'global-OCLReID', 'rpf-ReID'], default='part-OCLReID', help='tracking method')
@@ -323,6 +323,8 @@ if __name__ == '__main__':
     hyper_params.mmtracking_dir = file_path.parent
     if args.input is None:
         args.input = osp.join(file_path.parent, "demo_video.mp4")
+    elif args.input.lower() in ['0', '1', '2', 'webcam']:  # Webcam input
+        args.input = int(args.input) if args.input.isdigit() else 0
     hyper_params.input = args.input
     hyper_params.output = args.output
     hyper_params.show_result = args.show_result
