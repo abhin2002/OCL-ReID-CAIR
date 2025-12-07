@@ -146,8 +146,8 @@ class TargetIdentificationEvaluator():
         # load images / video / webcam / RTSP stream
         use_webcam = True
         # Use RTSP stream instead of local webcam
-        rtsp_url = 'rtsp://10.19.75.56:8554/webcam'
-        cap = cv2.VideoCapture(rtsp_url)
+        rtsp_url = 'rtsp://192.168.1.113:8554/webcam'
+        cap = cv2.VideoCapture(rtsp_url + "?tcp=0", cv2.CAP_FFMPEG)
         imgs = None
         total_frames = None
 
