@@ -1,0 +1,3 @@
+ ./mediamtx
+
+  python ./rtsp-server.py

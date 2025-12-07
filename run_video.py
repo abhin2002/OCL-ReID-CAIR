@@ -143,9 +143,11 @@ class TargetIdentificationEvaluator():
         return Tracker(self.type, self.config, self.ckpt, hyper_config=self.hyper_config, seed=seed, identifier_config=self.identifier_params)
 
     def run_video(self):
-        # load images / video / webcam
+        # load images / video / webcam / RTSP stream
         use_webcam = True
-        cap = cv2.VideoCapture(0)
+        # Use RTSP stream instead of local webcam
+        rtsp_url = 'rtsp://10.19.75.56:8554/webcam'
+        cap = cv2.VideoCapture(rtsp_url)
         imgs = None
         total_frames = None
 
